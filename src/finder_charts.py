@@ -806,6 +806,7 @@ class FinderChart:
 
         if reticle:
             ax.scatter(*center_pix, marker="o", fc="none", ec="m", s=1000)
+        return ax
 
     def plot_compass(
         self,
