@@ -6,6 +6,7 @@ import numpy as np
 from astroplan import Target
 from astropy import units as u
 from astropy.coordinates import Angle, SkyCoord
+from astropy.io import fits
 from astropy.visualization.wcsaxes import WCSAxes
 from astropy.wcs import WCS
 from astropy.wcs.utils import proj_plane_pixel_scales
@@ -114,14 +115,14 @@ class InstrumentFOV:
             self.height = height.to(u.arcmin)
             self.position_angle = position_angle.to(u.deg)
             self.label += (
-                f"FOV:       {self.width.to_value(u.arcmin):.2f}′"
+                f"FOV:        {self.width.to_value(u.arcmin):.2f}′"
                 + f"× {self.height.to_value(u.arcmin):.2f}′"
             )
             if position_angle != 0 * u.deg:
-                self.label += f"\nPA:        {self.position_angle.to_value(u.deg):.2f}°"
+                self.label += f"\nPA:         {self.position_angle.to_value(u.deg):.2f}°"
         if self.shape == "circle":
             self.radius = radius.to(u.arcmin)
-            self.label += f"FOV:       {self.radius.to_value(u.arcmin):.2f}′"
+            self.label += f"FOV:        {self.radius.to_value(u.arcmin):.2f}′"
         else:
             NotImplementedError("Only 'rectangle' or 'circle' shapes are accepted.")
 
@@ -279,11 +280,10 @@ class FinderChart:
         """
         position = self.coord
         coordinates = "icrs"
-        hdu = SkyView.get_images(
+        self.hdu = SkyView.get_images(
             position=position, coordinates=coordinates, survey=survey, radius=fov_radius, **kwargs
         )[0][0]
-        self.hdu = hdu
-        self.wcs = WCS(hdu.header)
+        self.wcs = WCS(self.hdu.header)
         self.survey = survey
         self.fov_radius = fov_radius
 
@@ -291,7 +291,71 @@ class FinderChart:
         self.image_label += (
             f"FOV:    {fov_radius.to_value(u.arcmin):.2f}′× {fov_radius.to_value(u.arcmin):.2f}′"
         )
-        return hdu
+        return self.hdu
+
+    def load_image(
+        self,
+        file_name: str,
+        survey_name: str = "--",
+    ):
+        """
+        Load a FITS image from disk and initialize the associated WCS.
+
+        Parameters
+        ----------
+        file_name : str
+            Path to the FITS image file.
+        survey_name : str, optional
+            Label describing the image survey or instrument.
+            Default is ``"--"``.
+
+        Returns
+        -------
+        `~astropy.io.fits.PrimaryHDU`
+            Primary HDU containing the image data and header.
+
+        Notes
+        -----
+        The loaded FITS HDU, WCS solution, survey label, and estimated
+        field-of-view are cached on the instance.
+
+        The field-of-view is estimated assuming square pixels using:
+
+        .. math::
+
+            \\mathrm{FOV} =
+            N_\\mathrm{pix} \\times
+            \\mathrm{pixel\\ scale}
+
+        where the pixel scale is derived from
+        :func:`astropy.wcs.utils.proj_plane_pixel_scales`.
+
+        Examples
+        --------
+        Load a local FITS image:
+
+        >>> fc.load_image("finder.fits")
+
+        Load an Astropy tutorial image:
+
+        >>> from astropy.utils.data import get_pkg_data_filename
+        >>> file_name = get_pkg_data_filename(
+        ...     "galactic_center/gc_msx_e.fits"
+        ... )
+        >>> fc.load_image(file_name, survey_name="MSX")
+        """
+
+        self.hdu = fits.open(file_name)[0]
+        self.wcs = WCS(self.hdu.header)
+        self.survey = survey_name
+        self.fov_radius = proj_plane_pixel_scales(self.wcs)[0] * self.hdu.data.shape[0] * u.deg
+
+        self.image_label = f"Survey: {self.survey}\n"
+        self.image_label += (
+            f"FOV:    {self.fov_radius.to_value(u.arcmin):.2f}′× "
+            + f"{self.fov_radius.to_value(u.arcmin):.2f}′"
+        )
+        return self.hdu
 
     def plot_image(
         self,
@@ -342,38 +406,39 @@ class FinderChart:
             image_data = self.hdu.data
         ax.imshow(image_data, **kwargs)
 
-        # Primary axes (bottom/left)
-        ra = ax.coords["ra"]
-        dec = ax.coords["dec"]
-        # Labels
-        ra.set_axislabel("R.A.")
-        dec.set_axislabel("Dec.")
-        if show_degrees:
-            # ONLY bottom/left
-            ra.set_ticks_position("b")
-            ra.set_ticklabel_position("b")
-            ra.set_axislabel_position("b")
-            dec.set_ticks_position("l")
-            dec.set_ticklabel_position("l")
-            dec.set_axislabel_position("l")
-
-            # Overlay axes (top/right)
-            overlay = ax.get_coords_overlay("icrs")
-            ra_deg = overlay["ra"]
-            dec_deg = overlay["dec"]
-            # ONLY top/right
-            ra_deg.set_ticks_position("t")
-            ra_deg.set_ticklabel_position("t")
-            dec_deg.set_ticks_position("r")
-            dec_deg.set_ticklabel_position("r")
-            # Format in degrees
-            ra_deg.set_format_unit(u.deg)
-            dec_deg.set_format_unit(u.deg)
-            ra_deg.set_major_formatter("d.ddd")
-            dec_deg.set_major_formatter("d.ddd")
+        if "ra" in ax.coords:
+            # Primary axes (bottom/left)
+            ra = ax.coords["ra"]
+            dec = ax.coords["dec"]
             # Labels
-            ra_deg.set_axislabel("R.A. [°]")
-            dec_deg.set_axislabel("Dec. [°]")
+            ra.set_axislabel("R.A.")
+            dec.set_axislabel("Dec.")
+            if show_degrees:
+                # ONLY bottom/left
+                ra.set_ticks_position("b")
+                ra.set_ticklabel_position("b")
+                ra.set_axislabel_position("b")
+                dec.set_ticks_position("l")
+                dec.set_ticklabel_position("l")
+                dec.set_axislabel_position("l")
+
+                # Overlay axes (top/right)
+                overlay = ax.get_coords_overlay("icrs")
+                ra_deg = overlay["ra"]
+                dec_deg = overlay["dec"]
+                # ONLY top/right
+                ra_deg.set_ticks_position("t")
+                ra_deg.set_ticklabel_position("t")
+                dec_deg.set_ticks_position("r")
+                dec_deg.set_ticklabel_position("r")
+                # Format in degrees
+                ra_deg.set_format_unit(u.deg)
+                dec_deg.set_format_unit(u.deg)
+                ra_deg.set_major_formatter("d.ddd")
+                dec_deg.set_major_formatter("d.ddd")
+                # Labels
+                ra_deg.set_axislabel("R.A. [°]")
+                dec_deg.set_axislabel("Dec. [°]")
 
         if self.target.name is not None:
             label = f"Target:        {self.target.name}\n"
