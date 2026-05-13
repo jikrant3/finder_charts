@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Literal
+import warnings
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -406,39 +407,41 @@ class FinderChart:
             image_data = self.hdu.data
         ax.imshow(image_data, **kwargs)
 
-        if "ra" in ax.coords:
-            # Primary axes (bottom/left)
-            ra = ax.coords["ra"]
-            dec = ax.coords["dec"]
-            # Labels
-            ra.set_axislabel("R.A.")
-            dec.set_axislabel("Dec.")
-            if show_degrees:
-                # ONLY bottom/left
-                ra.set_ticks_position("b")
-                ra.set_ticklabel_position("b")
-                ra.set_axislabel_position("b")
-                dec.set_ticks_position("l")
-                dec.set_ticklabel_position("l")
-                dec.set_axislabel_position("l")
+        x0 = ax.coords[0]
+        y0 = ax.coords[1]
+        # ONLY bottom/left
+        x0.set_ticks_position("b")
+        x0.set_ticklabel_position("b")
+        x0.set_axislabel_position("b")
+        y0.set_ticks_position("l")
+        y0.set_ticklabel_position("l")
+        y0.set_axislabel_position("l")
 
-                # Overlay axes (top/right)
-                overlay = ax.get_coords_overlay("icrs")
-                ra_deg = overlay["ra"]
-                dec_deg = overlay["dec"]
-                # ONLY top/right
-                ra_deg.set_ticks_position("t")
-                ra_deg.set_ticklabel_position("t")
-                dec_deg.set_ticks_position("r")
-                dec_deg.set_ticklabel_position("r")
-                # Format in degrees
-                ra_deg.set_format_unit(u.deg)
-                dec_deg.set_format_unit(u.deg)
-                ra_deg.set_major_formatter("d.ddd")
-                dec_deg.set_major_formatter("d.ddd")
-                # Labels
-                ra_deg.set_axislabel("R.A. [°]")
-                dec_deg.set_axislabel("Dec. [°]")
+        if show_degrees:
+            # Overlay axes (top/right)
+            overlay = ax.get_coords_overlay("icrs")
+            ra_deg = overlay["ra"]
+            dec_deg = overlay["dec"]
+            # ONLY top/right
+            ra_deg.set_ticks_position("t")
+            ra_deg.set_ticklabel_position("t")
+            dec_deg.set_ticks_position("r")
+            dec_deg.set_ticklabel_position("r")
+            # Format in degrees
+            ra_deg.set_format_unit(u.deg)
+            dec_deg.set_format_unit(u.deg)
+            ra_deg.set_major_formatter("d.ddd")
+            dec_deg.set_major_formatter("d.ddd")
+            ra_deg.set_ticks(number=6)
+            dec_deg.set_ticks(number=6)
+            # Labels
+            ra_deg.set_axislabel("R.A. [°]")
+            dec_deg.set_axislabel("Dec. [°]")
+        if "ra" not in ax.coords:
+            warnings.warn(
+                "The image WCS is not in equatorial coordinates."
+                + "The position angles are calculated relative to equatorial north pole."
+            )
 
         if self.target.name is not None:
             label = f"Target:        {self.target.name}\n"
@@ -743,9 +746,7 @@ class FinderChart:
         if instrument_fov.shape == "circle":
             # Convert center to pixel coordinates for plotting
             center_pix = self.wcs.world_to_pixel(self.coord)
-            pixel_scale = (proj_plane_pixel_scales(self.wcs) * u.deg / u.pix).to(u.arcsec / u.pix)[
-                0
-            ]
+            pixel_scale = (self.wcs.proj_plane_pixel_scales() / u.pix).to(u.arcsec / u.pix)[0]
             radius = (instrument_fov.radius / pixel_scale).to(u.pix)
             circ = Circle(center_pix, radius=radius.to_value(u.pix), **kwargs)
             ax.add_artist(circ)
@@ -805,6 +806,182 @@ class FinderChart:
 
         if reticle:
             ax.scatter(*center_pix, marker="o", fc="none", ec="m", s=1000)
+
+    def plot_compass(
+        self,
+        ax: WCSAxes,
+        frac_length: float = 0.12,
+        x_frac: float = 0.08,
+        y_frac: float = 0.08,
+        color: str = "m",
+        linewidth: float = 2.0,
+        fontsize: float = 12,
+    ):
+        """
+        Plot North/East compass arrows on a WCS image.
+
+        The compass position and size scale automatically with the image size.
+
+        Parameters
+        ----------
+        ax : `~astropy.visualization.wcsaxes.WCSAxes`
+            Axes containing the image.
+        wcs : `~astropy.wcs.WCS`
+            Celestial WCS associated with the image.
+        frac_length : float, optional
+            Arrow length as a fraction of the image size.
+            Default is ``0.12``.
+        x_frac : float, optional
+            Horizontal anchor position as a fraction of image width.
+            ``0`` corresponds to the left edge and ``1`` to the right edge.
+            Default is ``0.08``.
+        y_frac : float, optional
+            Vertical anchor position as a fraction of image height.
+            ``0`` corresponds to the bottom edge and ``1`` to the top edge.
+            Default is ``0.08``.
+        frame : str, optional
+            Coordinate frame used for plotting.
+            Default is ``"icrs"``.
+        color : str, optional
+            Arrow and label color.
+        linewidth : float, optional
+            Arrow line width.
+        fontsize : float, optional
+            Label font size.
+
+        Returns
+        -------
+        ax : `~astropy.visualization.wcsaxes.WCSAxes`
+            Modified axes.
+
+        Notes
+        -----
+        The compass orientation is computed from the local celestial geometry,
+        ensuring correct orientation for rotated or distorted projections.
+
+        Examples
+        --------
+        >>> plot_compass(ax, wcs)
+
+        Place the compass in the lower-right corner:
+
+        >>> plot_compass(
+        ...     ax,
+        ...     wcs,
+        ...     x_frac=0.9,
+        ...     y_frac=0.1,
+        ... )
+
+        Increase compass size:
+
+        >>> plot_compass(
+        ...     ax,
+        ...     wcs,
+        ...     frac_length=0.2,
+        ... )
+        """
+        wcs = self.wcs
+        nx = wcs.pixel_shape[0]
+        ny = wcs.pixel_shape[1]
+
+        size = min(nx, ny)
+
+        # Anchor position in pixel coordinates
+        x0 = x_frac * nx
+        y0 = y_frac * ny
+
+        # Arrow size in pixels
+        arrow_pix = frac_length * size
+
+        # Convert anchor pixel -> world coordinates
+        sky0 = wcs.pixel_to_world(x0, y0).icrs
+
+        # Local pixel scale
+        pixscale = (abs(wcs.proj_plane_pixel_scales()[0]) / u.pix).to(u.arcsec / u.pix)
+
+        # Convert arrow length to angular separation
+        sep = (arrow_pix * u.pix * pixscale).to(u.arcsec)
+
+        # North/East positions
+        north = sky0.directional_offset_by(
+            0 * u.deg,
+            sep,
+        ).icrs
+
+        east = sky0.directional_offset_by(
+            90 * u.deg,
+            sep,
+        ).icrs
+
+        ax.set_xlim(ax.get_xlim())
+        ax.set_ylim(ax.get_ylim())
+
+        # Convert to pixel coordinates
+        x0p, y0p = wcs.world_to_pixel(sky0)
+        xnp, ynp = wcs.world_to_pixel(north)
+        xep, yep = wcs.world_to_pixel(east)
+
+        # Draw arrows in pixel coordinates
+        ax.arrow(
+            x0p,
+            y0p,
+            xnp - x0p,
+            ynp - y0p,
+            color=color,
+            width=0,
+            head_width=0.015 * size,
+            length_includes_head=True,
+            linewidth=linewidth,
+        )
+
+        ax.arrow(
+            x0p,
+            y0p,
+            xep - x0p,
+            yep - y0p,
+            color=color,
+            width=0,
+            head_width=0.015 * size,
+            length_includes_head=True,
+            linewidth=linewidth,
+        )
+
+        # Labels
+        north_label = sky0.directional_offset_by(
+            0 * u.deg,
+            1.15 * sep,
+        ).icrs
+
+        east_label = sky0.directional_offset_by(
+            90 * u.deg,
+            1.15 * sep,
+        ).icrs
+
+        xnlp, ynlp = wcs.world_to_pixel(north_label)
+        xelp, yelp = wcs.world_to_pixel(east_label)
+
+        ax.text(
+            xnlp,
+            ynlp,
+            "N",
+            color=color,
+            fontsize=fontsize,
+            ha="center",
+            va="center",
+            weight="bold",
+        )
+
+        ax.text(
+            xelp,
+            yelp,
+            "E",
+            color=color,
+            fontsize=fontsize,
+            ha="center",
+            va="center",
+            weight="bold",
+        )
+        return ax
 
 
 def savefig(
