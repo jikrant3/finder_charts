@@ -15,3 +15,5 @@ Tested on:
 `astroquery` 0.4.11,
 `matplotlib` 3.10.3,
 `numpy` 1.26.4
+
+![example_finder_chart](plots/example_chart_6.jpg)
