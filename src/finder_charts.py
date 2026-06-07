@@ -353,8 +353,8 @@ class FinderChart:
 
         self.image_label = f"Survey: {self.survey}\n"
         self.image_label += (
-            f"FOV:    {self.fov_radius.to_value(u.arcmin):.2f}′× "
-            + f"{self.fov_radius.to_value(u.arcmin):.2f}′"
+            f"FOV:    {2 * self.fov_radius.to_value(u.arcmin):.2f}′× "
+            + f"{2 * self.fov_radius.to_value(u.arcmin):.2f}′"
         )
         return self.hdu
 
